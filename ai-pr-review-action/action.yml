@@ -1,0 +1,23 @@
+name: "AI PR Review Action"
+description: "Reviews Pull Requests using OpenAI and posts comments"
+author: "Pulkit Gupta"
+
+inputs:
+  github_token:
+    description: "GitHub token"
+    required: true
+  openai_api_key:
+    description: "OpenAI API key"
+    required: true
+  model:
+    description: "Model name"
+    required: false
+    default: "gpt-4o-mini"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"
+
+branding:
+  icon: "code"
+  color: "blue"
