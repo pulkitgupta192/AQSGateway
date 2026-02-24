@@ -4,14 +4,21 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   review:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
 
-      - name: AI PR Review
-        uses: pulkitgupta192/ai-pr-review-action@main
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Run AI PR Review
+        uses: ./ai-pr-review-action
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
