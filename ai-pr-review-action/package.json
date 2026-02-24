@@ -4,8 +4,7 @@
   "description": "AI powered PR review",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "lint": "eslint ."
+    "build": "ncc build src/index.ts -o dist"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
@@ -13,6 +12,7 @@
     "openai": "^4.0.0"
   },
   "devDependencies": {
+    "@vercel/ncc": "^0.38.4",
     "typescript": "^5.9.3"
   }
 }
