@@ -62,7 +62,7 @@ async function run(): Promise<void> {
         {
           role: "system",
           content:
-            "You are a strict enterprise code reviewer. Return ONLY valid JSON in this format: { \"score\": number, \"summary\": string, \"issues\": [{ \"file\": string, \"line\": number, \"severity\": \"critical|major|minor\", \"comment\": string }] }"
+            "You are a strict enterprise code reviewer. Score MUST be a number between 0 and 10. Do NOT return percentages. Return ONLY valid JSON in this format: { \"score\": number, \"summary\": string, \"issues\": [{ \"file\": string, \"line\": number, \"severity\": \"critical|major|minor\", \"comment\": string }] }"
         },
         {
           role: "user",
@@ -82,7 +82,17 @@ async function run(): Promise<void> {
       return;
     }
 
-    const score = parsed.score ?? 0;
+    let score = parsed.score ?? 0;
+
+	// Normalize score if model returns 0–100 scale
+	if (score > 10) {
+	  core.info(`Normalizing score from ${score} to 0–10 scale.`);
+	  score = score / 10;
+	}
+
+	// Clamp to 0–10 range
+	score = Math.max(0, Math.min(10, score));
+
     const summary = parsed.summary ?? "No summary provided.";
     const issues = parsed.issues ?? [];
 
