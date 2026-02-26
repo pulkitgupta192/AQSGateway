@@ -16,7 +16,19 @@ inputs:
   min_score:
     description: "Minimum score required to pass PR"
     required: false
-    default: "7"    
+    default: "7" 
+  critical_weight:
+    description: "Points deducted per critical issue"
+    required: false
+    default: "3"
+  major_weight:
+    description: "Points deducted per major issue"
+    required: false
+    default: "2"
+  minor_weight:
+    description: "Points deducted per minor issue"
+    required: false
+    default: "1"    
 
 runs:
   using: "node20"

@@ -84,37 +84,44 @@ async function run(): Promise<void> {
     const summary = parsed.summary ?? "No summary provided.";
     const issues = parsed.issues ?? [];
 
-    // ===============================
-    // Deterministic Weighted Scoring
-    // ===============================
+	// ===============================
+	// Configurable Weighted Scoring
+	// ===============================
 
-    let score = 10;
+	const criticalWeight = parseInt(core.getInput("critical_weight") || "3");
+	const majorWeight = parseInt(core.getInput("major_weight") || "2");
+	const minorWeight = parseInt(core.getInput("minor_weight") || "1");
 
-    let criticalCount = 0;
-    let majorCount = 0;
-    let minorCount = 0;
+	let score = 10;
 
-    for (const issue of issues) {
-      const severity = issue.severity?.toLowerCase();
+	let criticalCount = 0;
+	let majorCount = 0;
+	let minorCount = 0;
 
-      if (severity === "critical") {
-        score -= 3;
-        criticalCount++;
-      } else if (severity === "major") {
-        score -= 2;
-        majorCount++;
-      } else if (severity === "minor") {
-        score -= 1;
-        minorCount++;
-      }
-    }
+	for (const issue of issues) {
+	  const severity = issue.severity?.toLowerCase();
 
-    score = Math.max(0, score);
+	  if (severity === "critical") {
+		score -= criticalWeight;
+		criticalCount++;
+	  } else if (severity === "major") {
+		score -= majorWeight;
+		majorCount++;
+	  } else if (severity === "minor") {
+		score -= minorWeight;
+		minorCount++;
+	  }
+	}
 
-    core.info(`Deterministic Score: ${score}/10`);
-    core.info(
-      `Critical: ${criticalCount}, Major: ${majorCount}, Minor: ${minorCount}`
-    );
+	score = Math.max(0, score);
+
+	core.info(`Deterministic Score: ${score}/10`);
+	core.info(
+	  `Critical: ${criticalCount}, Major: ${majorCount}, Minor: ${minorCount}`
+	);
+	core.info(
+	  `Weights → Critical: ${criticalWeight}, Major: ${majorWeight}, Minor: ${minorWeight}`
+	);
 
     // ===============================
     // Inline Review Comments

@@ -35726,7 +35726,7 @@ async function run() {
             messages: [
                 {
                     role: "system",
-                    content: "You are a strict enterprise code reviewer. Score MUST be a number between 0 and 10. Do NOT return percentages. Return ONLY valid JSON in this format: { \"score\": number, \"summary\": string, \"issues\": [{ \"file\": string, \"line\": number, \"severity\": \"critical|major|minor\", \"comment\": string }] }"
+                    content: "You are a strict enterprise code reviewer. Return ONLY valid JSON in this format: { \"summary\": string, \"issues\": [{ \"file\": string, \"line\": number, \"severity\": \"critical|major|minor\", \"comment\": string }] }"
                 },
                 {
                     role: "user",
@@ -35743,18 +35743,40 @@ async function run() {
             core.setFailed("AI did not return valid JSON.");
             return;
         }
-        let score = parsed.score ?? 0;
-        // Normalize score if model returns 0–100 scale
-        if (score > 10) {
-            core.info(`Normalizing score from ${score} to 0–10 scale.`);
-            score = score / 10;
-        }
-        // Clamp to 0–10 range
-        score = Math.max(0, Math.min(10, score));
         const summary = parsed.summary ?? "No summary provided.";
         const issues = parsed.issues ?? [];
-        core.info(`AI Score: ${score}`);
-        // Filter only valid files and numeric lines
+        // ===============================
+        // Configurable Weighted Scoring
+        // ===============================
+        const criticalWeight = parseInt(core.getInput("critical_weight") || "3");
+        const majorWeight = parseInt(core.getInput("major_weight") || "2");
+        const minorWeight = parseInt(core.getInput("minor_weight") || "1");
+        let score = 10;
+        let criticalCount = 0;
+        let majorCount = 0;
+        let minorCount = 0;
+        for (const issue of issues) {
+            const severity = issue.severity?.toLowerCase();
+            if (severity === "critical") {
+                score -= criticalWeight;
+                criticalCount++;
+            }
+            else if (severity === "major") {
+                score -= majorWeight;
+                majorCount++;
+            }
+            else if (severity === "minor") {
+                score -= minorWeight;
+                minorCount++;
+            }
+        }
+        score = Math.max(0, score);
+        core.info(`Deterministic Score: ${score}/10`);
+        core.info(`Critical: ${criticalCount}, Major: ${majorCount}, Minor: ${minorCount}`);
+        core.info(`Weights → Critical: ${criticalWeight}, Major: ${majorWeight}, Minor: ${minorWeight}`);
+        // ===============================
+        // Inline Review Comments
+        // ===============================
         const reviewComments = issues
             .filter((issue) => issue.file &&
             validFilePaths.includes(issue.file) &&
@@ -35765,7 +35787,6 @@ async function run() {
             side: "RIGHT",
             body: `🔎 **${issue.severity?.toUpperCase() || "ISSUE"}**\n\n${issue.comment}`
         }));
-        // Create inline review
         if (reviewComments.length > 0) {
             await octokit.rest.pulls.createReview({
                 owner,
@@ -35775,7 +35796,9 @@ async function run() {
                 comments: reviewComments
             });
         }
-        // Post summary comment
+        // ===============================
+        // Summary Comment
+        // ===============================
         await octokit.rest.issues.createComment({
             owner,
             repo,
@@ -35785,11 +35808,18 @@ async function run() {
 **Score:** ${score}/10  
 **Minimum Required:** ${minScore}
 
+### 📊 Issue Breakdown
+- 🔴 Critical: ${criticalCount}
+- 🟠 Major: ${majorCount}
+- 🟡 Minor: ${minorCount}
+
 ### 📋 Summary
 ${summary}
 `
         });
-        // Enforce threshold
+        // ===============================
+        // Enforce Quality Gate
+        // ===============================
         if (score < minScore) {
             core.setFailed(`PR score ${score} is below required minimum ${minScore}.`);
         }
