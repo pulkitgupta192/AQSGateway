@@ -35775,6 +35775,73 @@ async function run() {
         core.info(`Critical: ${criticalCount}, Major: ${majorCount}, Minor: ${minorCount}`);
         core.info(`Weights → Critical: ${criticalWeight}, Major: ${majorWeight}, Minor: ${minorWeight}`);
         // ===============================
+        // GitHub Checks API Integration
+        // ===============================
+        core.info("Creating GitHub Check Run...");
+        // Create initial check run
+        const checkRun = await octokit.rest.checks.create({
+            owner,
+            repo,
+            name: "AI Code Review",
+            head_sha: context.payload.pull_request?.head.sha,
+            status: "in_progress"
+        });
+        const checkRunId = checkRun.data.id;
+        // Build annotations
+        const annotations = issues
+            .filter((issue) => issue.file &&
+            validFilePaths.includes(issue.file) &&
+            typeof issue.line === "number")
+            .map((issue) => ({
+            path: issue.file,
+            start_line: issue.line,
+            end_line: issue.line,
+            annotation_level: issue.severity === "critical"
+                ? "failure"
+                : issue.severity === "major"
+                    ? "warning"
+                    : "notice",
+            message: issue.comment
+        }));
+        // GitHub allows max 50 annotations per request
+        const batchSize = 50;
+        for (let i = 0; i < annotations.length; i += batchSize) {
+            const batch = annotations.slice(i, i + batchSize);
+            await octokit.rest.checks.update({
+                owner,
+                repo,
+                check_run_id: checkRunId,
+                output: {
+                    title: "AI Code Review Results",
+                    summary: `Score: ${score}/10
+
+	Critical: ${criticalCount}
+	Major: ${majorCount}
+	Minor: ${minorCount}`,
+                    annotations: batch
+                }
+            });
+        }
+        // Finalize check run
+        await octokit.rest.checks.update({
+            owner,
+            repo,
+            check_run_id: checkRunId,
+            status: "completed",
+            conclusion: score < minScore ? "failure" : "success",
+            completed_at: new Date().toISOString(),
+            output: {
+                title: "AI Code Review Complete",
+                summary: `Final Score: ${score}/10
+
+	Critical: ${criticalCount}
+	Major: ${majorCount}
+	Minor: ${minorCount}
+
+	${summary}`
+            }
+        });
+        // ===============================
         // Inline Review Comments
         // ===============================
         const reviewComments = issues
