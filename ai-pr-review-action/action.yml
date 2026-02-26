@@ -13,6 +13,10 @@ inputs:
     description: "Model name"
     required: false
     default: "gpt-4o-mini"
+  min_score:
+    description: "Minimum score required to pass PR"
+    required: false
+    default: "7"    
 
 runs:
   using: "node20"

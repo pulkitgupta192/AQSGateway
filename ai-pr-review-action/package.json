@@ -1,17 +1,18 @@
 {
   "name": "ai-pr-review-action",
   "version": "1.0.0",
-  "description": "AI powered PR review",
+  "description": "AI powered PR review with scoring",
   "main": "dist/index.js",
   "scripts": {
-    "build": "ncc build src/index.ts -o dist"
+    "build": "npx @vercel/ncc build src/index.ts -o dist"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
-    "@actions/github": "^8.0.1",
+    "@actions/github": "^6.0.0",
     "openai": "^4.0.0"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "@vercel/ncc": "^0.38.4",
     "typescript": "^5.9.3"
   }
