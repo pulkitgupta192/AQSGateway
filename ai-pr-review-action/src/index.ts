@@ -5,15 +5,6 @@ import { components } from "@octokit/openapi-types";
 
 type PullRequestFile = components["schemas"]["diff-entry"];
 
-interface ReviewResponse {
-  score: number;
-  summary: string;
-  critical: string[];
-  major: string[];
-  minor: string[];
-  suggestions: string[];
-}
-
 async function run(): Promise<void> {
   try {
     const githubToken = core.getInput("github_token", { required: true });
@@ -25,13 +16,19 @@ async function run(): Promise<void> {
     const context = github.context;
 
     if (context.eventName !== "pull_request") {
-      core.info("Not a PR event.");
+      core.info("This action only runs on pull_request events.");
       return;
     }
 
     const { owner, repo } = context.repo;
     const prNumber = context.payload.pull_request?.number;
-    if (!prNumber) throw new Error("PR number not found");
+
+    if (!prNumber) {
+      core.setFailed("Pull request number not found.");
+      return;
+    }
+
+    core.info(`Fetching files for PR #${prNumber}`);
 
     const { data } = await octokit.rest.pulls.listFiles({
       owner,
@@ -42,17 +39,21 @@ async function run(): Promise<void> {
 
     const files = data as PullRequestFile[];
 
+    const validFilePaths = files.map((f) => f.filename);
+
     const diff = files
       .filter((f) => f.patch)
       .map((f) => `File: ${f.filename}\n${f.patch}`)
       .join("\n\n");
 
     if (!diff) {
-      core.info("No diff found.");
+      core.info("No diff content to review.");
       return;
     }
 
     const openai = new OpenAI({ apiKey: openaiKey });
+
+    core.info("Sending diff to OpenAI...");
 
     const response = await openai.chat.completions.create({
       model,
@@ -60,78 +61,89 @@ async function run(): Promise<void> {
       messages: [
         {
           role: "system",
-          content: `
-You are a senior enterprise software architect.
-
-Review the PR diff and respond STRICTLY in valid JSON:
-
-{
-  "score": number (0-10),
-  "summary": "short summary",
-  "critical": [],
-  "major": [],
-  "minor": [],
-  "suggestions": []
-}
-
-Scoring rules:
-- 9-10: Excellent production-ready
-- 7-8: Good but minor improvements
-- 5-6: Needs significant fixes
-- <5: Dangerous or poor quality
-`
+          content:
+            "You are a strict enterprise code reviewer. Return ONLY valid JSON in this format: { \"score\": number, \"summary\": string, \"issues\": [{ \"file\": string, \"line\": number, \"severity\": \"critical|major|minor\", \"comment\": string }] }"
         },
         {
           role: "user",
-          content: diff
+          content: `Review the following diff and reference actual filenames and line numbers:\n\n${diff}`
         }
       ]
     });
 
-    const content = response.choices[0].message.content;
+    const content = response.choices?.[0]?.message?.content || "";
 
-    if (!content) throw new Error("No AI response received");
+    let parsed: any;
 
-    const review: ReviewResponse = JSON.parse(content);
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      core.setFailed("AI did not return valid JSON.");
+      return;
+    }
 
-    const reviewBody = `
-## 🤖 AI Code Review
+    const score = parsed.score ?? 0;
+    const summary = parsed.summary ?? "No summary provided.";
+    const issues = parsed.issues ?? [];
 
-### Score: **${review.score}/10**
+    core.info(`AI Score: ${score}`);
 
-### Summary
-${review.summary}
+    // Filter only valid files and numeric lines
+    const reviewComments = issues
+      .filter(
+        (issue: any) =>
+          issue.file &&
+          validFilePaths.includes(issue.file) &&
+          typeof issue.line === "number"
+      )
+      .map((issue: any) => ({
+        path: issue.file,
+        line: issue.line,
+        side: "RIGHT",
+        body: `🔎 **${issue.severity?.toUpperCase() || "ISSUE"}**\n\n${issue.comment}`
+      }));
 
-### 🔴 Critical
-${review.critical.join("\n") || "None"}
+    // Create inline review
+    if (reviewComments.length > 0) {
+      await octokit.rest.pulls.createReview({
+        owner,
+        repo,
+        pull_number: prNumber,
+        event: score < minScore ? "REQUEST_CHANGES" : "COMMENT",
+        comments: reviewComments
+      });
+    }
 
-### 🟠 Major
-${review.major.join("\n") || "None"}
-
-### 🟡 Minor
-${review.minor.join("\n") || "None"}
-
-### 💡 Suggestions
-${review.suggestions.join("\n") || "None"}
-`;
-
+    // Post summary comment
     await octokit.rest.issues.createComment({
       owner,
       repo,
       issue_number: prNumber,
-      body: reviewBody
+      body: `## 🤖 AI Code Review Summary
+
+**Score:** ${score}/10  
+**Minimum Required:** ${minScore}
+
+### 📋 Summary
+${summary}
+`
     });
 
-    if (review.score < minScore) {
+    // Enforce threshold
+    if (score < minScore) {
       core.setFailed(
-        `AI score ${review.score} is below required threshold ${minScore}. PR blocked.`
+        `PR score ${score} is below required minimum ${minScore}.`
       );
     } else {
-      core.info(`PR passed with score ${review.score}`);
+      core.info("PR passed AI quality gate.");
     }
 
-  } catch (err: any) {
-    core.setFailed(err.message);
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      core.setFailed(`Action failed: ${error.message}`);
+    } else {
+      core.setFailed("Unknown error occurred.");
+    }
   }
 }
 

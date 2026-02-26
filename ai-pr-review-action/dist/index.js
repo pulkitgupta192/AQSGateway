@@ -35692,13 +35692,16 @@ async function run() {
         const octokit = github.getOctokit(githubToken);
         const context = github.context;
         if (context.eventName !== "pull_request") {
-            core.info("Not a PR event.");
+            core.info("This action only runs on pull_request events.");
             return;
         }
         const { owner, repo } = context.repo;
         const prNumber = context.payload.pull_request?.number;
-        if (!prNumber)
-            throw new Error("PR number not found");
+        if (!prNumber) {
+            core.setFailed("Pull request number not found.");
+            return;
+        }
+        core.info(`Fetching files for PR #${prNumber}`);
         const { data } = await octokit.rest.pulls.listFiles({
             owner,
             repo,
@@ -35706,87 +35709,94 @@ async function run() {
             per_page: 100
         });
         const files = data;
+        const validFilePaths = files.map((f) => f.filename);
         const diff = files
             .filter((f) => f.patch)
             .map((f) => `File: ${f.filename}\n${f.patch}`)
             .join("\n\n");
         if (!diff) {
-            core.info("No diff found.");
+            core.info("No diff content to review.");
             return;
         }
         const openai = new openai_1.default({ apiKey: openaiKey });
+        core.info("Sending diff to OpenAI...");
         const response = await openai.chat.completions.create({
             model,
             temperature: 0.2,
             messages: [
                 {
                     role: "system",
-                    content: `
-You are a senior enterprise software architect.
-
-Review the PR diff and respond STRICTLY in valid JSON:
-
-{
-  "score": number (0-10),
-  "summary": "short summary",
-  "critical": [],
-  "major": [],
-  "minor": [],
-  "suggestions": []
-}
-
-Scoring rules:
-- 9-10: Excellent production-ready
-- 7-8: Good but minor improvements
-- 5-6: Needs significant fixes
-- <5: Dangerous or poor quality
-`
+                    content: "You are a strict enterprise code reviewer. Return ONLY valid JSON in this format: { \"score\": number, \"summary\": string, \"issues\": [{ \"file\": string, \"line\": number, \"severity\": \"critical|major|minor\", \"comment\": string }] }"
                 },
                 {
                     role: "user",
-                    content: diff
+                    content: `Review the following diff and reference actual filenames and line numbers:\n\n${diff}`
                 }
             ]
         });
-        const content = response.choices[0].message.content;
-        if (!content)
-            throw new Error("No AI response received");
-        const review = JSON.parse(content);
-        const reviewBody = `
-## 🤖 AI Code Review
-
-### Score: **${review.score}/10**
-
-### Summary
-${review.summary}
-
-### 🔴 Critical
-${review.critical.join("\n") || "None"}
-
-### 🟠 Major
-${review.major.join("\n") || "None"}
-
-### 🟡 Minor
-${review.minor.join("\n") || "None"}
-
-### 💡 Suggestions
-${review.suggestions.join("\n") || "None"}
-`;
+        const content = response.choices?.[0]?.message?.content || "";
+        let parsed;
+        try {
+            parsed = JSON.parse(content);
+        }
+        catch {
+            core.setFailed("AI did not return valid JSON.");
+            return;
+        }
+        const score = parsed.score ?? 0;
+        const summary = parsed.summary ?? "No summary provided.";
+        const issues = parsed.issues ?? [];
+        core.info(`AI Score: ${score}`);
+        // Filter only valid files and numeric lines
+        const reviewComments = issues
+            .filter((issue) => issue.file &&
+            validFilePaths.includes(issue.file) &&
+            typeof issue.line === "number")
+            .map((issue) => ({
+            path: issue.file,
+            line: issue.line,
+            side: "RIGHT",
+            body: `🔎 **${issue.severity?.toUpperCase() || "ISSUE"}**\n\n${issue.comment}`
+        }));
+        // Create inline review
+        if (reviewComments.length > 0) {
+            await octokit.rest.pulls.createReview({
+                owner,
+                repo,
+                pull_number: prNumber,
+                event: score < minScore ? "REQUEST_CHANGES" : "COMMENT",
+                comments: reviewComments
+            });
+        }
+        // Post summary comment
         await octokit.rest.issues.createComment({
             owner,
             repo,
             issue_number: prNumber,
-            body: reviewBody
+            body: `## 🤖 AI Code Review Summary
+
+**Score:** ${score}/10  
+**Minimum Required:** ${minScore}
+
+### 📋 Summary
+${summary}
+`
         });
-        if (review.score < minScore) {
-            core.setFailed(`AI score ${review.score} is below required threshold ${minScore}. PR blocked.`);
+        // Enforce threshold
+        if (score < minScore) {
+            core.setFailed(`PR score ${score} is below required minimum ${minScore}.`);
         }
         else {
-            core.info(`PR passed with score ${review.score}`);
+            core.info("PR passed AI quality gate.");
         }
     }
-    catch (err) {
-        core.setFailed(err.message);
+    catch (error) {
+        if (error instanceof Error) {
+            core.setFailed(`Action failed: ${error.message}`);
+        }
+        else {
+            core.setFailed("Unknown error occurred.");
+        }
     }
 }
 run();
